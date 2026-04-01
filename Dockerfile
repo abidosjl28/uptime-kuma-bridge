@@ -1,10 +1,19 @@
 FROM node:22-alpine
 
+# Install build dependencies for native modules
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    sqlite \
+    sqlite-dev
+
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --only=production
+# Install dependencies (better-sqlite3 needs to be compiled)
+RUN npm install --production=false
 
 COPY server.js ./
 
