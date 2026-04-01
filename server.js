@@ -4,7 +4,6 @@ import cors from 'cors';
 
 const app = express();
 const PORT = process.env.PORT || 3003;
-
 const DB_PATH = process.env.DB_PATH || '/app/data/kuma.db';
 
 app.use(cors());
@@ -12,13 +11,37 @@ app.use(express.json());
 
 let db;
 
+console.log('🔍 Attempting to connect to database at:', DB_PATH);
+console.log('📁 Database exists check...');
+
 try {
-  db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  const fs = await import('fs');
+  
+  try {
+    await fs.promises.access(DB_PATH, fs.constants.R_OK);
+    console.log('✓ Database file exists and is readable');
+  } catch (accessError) {
+    console.error('✗ Database file not found or not accessible:', accessError.message);
+    console.log('💡 This usually means the volume is not mounted correctly');
+    console.log('💡 Please verify:');
+    console.log('   1. The volume name matches Uptime Kuma\'s volume exactly');
+    console.log('   2. The volume is mounted at /app/data');
+    console.log('   3. The "Read Only" option is checked');
+    console.log('   4. Uptime Kuma is running and has created the database');
+    process.exit(1);
+  }
+  
+  db = new Database(DB_PATH, { readonly: true });
   console.log('✓ Connected to Uptime Kuma database:', DB_PATH);
   
   db.pragma('journal_mode = WAL');
+  
+  const testResult = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
+  console.log('✓ Database verification successful - monitors found:', testResult.count);
+  
 } catch (error) {
   console.error('✗ Failed to connect to database:', error.message);
+  console.error('✗ Stack trace:', error.stack);
   process.exit(1);
 }
 
@@ -47,6 +70,7 @@ app.get('/api/monitors', (req, res) => {
       ORDER BY id
     `).all();
     
+    console.log(`✓ Fetched ${monitors.length} monitors`);
     res.json({ monitors });
   } catch (error) {
     console.error('Error fetching monitors:', error);
@@ -130,6 +154,8 @@ app.get('/api/monitors/:id/heartbeats', (req, res) => {
     
     const heartbeats = db.prepare(query).all(...params);
     
+    console.log(`✓ Fetched ${heartbeats.length} heartbeats for monitor ${monitorId}`);
+    
     res.json({ 
       monitorId,
       total: heartbeats.length,
@@ -165,6 +191,8 @@ app.get('/api/monitors/:id/heartbeats/range', (req, res) => {
         AND time <= ?
       ORDER BY time ASC
     `).all(monitorId, startDate, endDate);
+    
+    console.log(`✓ Fetched ${heartbeats.length} heartbeats for monitor ${monitorId} in date range`);
     
     res.json({ 
       monitorId,
@@ -213,13 +241,15 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✓ Uptime Kuma Bridge API running on port ${PORT}`);
-  console.log(`✓ Database path: ${DB_PATH}`);
-  console.log(`✓ Endpoints available:`);
-  console.log(`  - GET /health`);
-  console.log(`  - GET /api/monitors`);
-  console.log(`  - GET /api/monitors/:id`);
-  console.log(`  - GET /api/monitors/:id/heartbeats`);
-  console.log(`  - GET /api/monitors/:id/heartbeats/range`);
-  console.log(`  - GET /api/stats`);
+  console.log('');
+  console.log('🚀 Uptime Kuma Bridge API running on port', PORT);
+  console.log('📁 Database path:', DB_PATH);
+  console.log('✓ Endpoints available:');
+  console.log('  - GET /health');
+  console.log('  - GET /api/monitors');
+  console.log('  - GET /api/monitors/:id');
+  console.log('  - GET /api/monitors/:id/heartbeats');
+  console.log('  - GET /api/monitors/:id/heartbeats/range');
+  console.log('  - GET /api/stats');
+  console.log('');
 });
