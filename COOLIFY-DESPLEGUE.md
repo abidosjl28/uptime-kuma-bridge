@@ -4,40 +4,60 @@
 
 - Tener acceso a Coolify
 - Uptime Kuma ya desplegado en Coolify
-- Repositorio Git con el código del Bridge
+- Repositorio Git con el código del Bridge: https://github.com/abidosjl28/uptime-kuma-bridge.git
 
 ## 🚀 Pasos para Desplegar
 
-### Paso 1: Preparar el Repositorio Git
+### Paso 1: Verificar el Repositorio
 
-1. Sube la carpeta `uptime-kuma-bridge` a un repositorio Git (GitHub, GitLab, Bitbucket, etc.)
-
-2. Asegúrate de incluir estos archivos:
-   - `Dockerfile`
-   - `package.json`
-   - `server.js`
-   - `.gitignore` (opcional)
+1. Ve a: https://github.com/abidosjl28/uptime-kuma-bridge
+2. Verifica que estos archivos estén en la raíz:
+   - ✅ `Dockerfile`
+   - ✅ `package.json`
+   - ✅ `server.js`
+   - ✅ `build.sh`
+   - ✅ `.dockerignore`
+   - ✅ `.coolifyignore`
 
 ### Paso 2: Crear el Servicio en Coolify
 
 1. Accede a tu panel de Coolify
 2. Haz clic en **"Create New Service"** → **"Docker"**
-3. Conecta tu repositorio Git
-4. Selecciona el repositorio del Bridge
-5. Configura:
+3. Conecta tu repositorio:
+   - **GitHub** → Buscar: `uptime-kuma-bridge`
+   - Selecciona el repositorio: `abidosjl28/uptime-kuma-bridge`
+4. Configura:
    - **Name**: `uptime-kuma-bridge`
-   - **Branch**: `main` (o la que uses)
+   - **Branch**: `main`
    - **Build Type**: `Dockerfile`
-   - **Dockerfile Path**: `Dockerfile`
-   - **Context Path**: `/uptime-kuma-bridge` (o la ruta correcta)
+   - **Dockerfile Path**: `Dockerfile` (dejar vacío o escribir solo "Dockerfile")
+   - **Context Path**: `/` (o dejar vacío para usar la raíz)
+5. Haz clic en **"Create Service"**
 
-6. Haz clic en **"Create Service"**
+### ⚠️ SOLUCIÓN DE ERRORES COMUNES
+
+#### Error: "failed to read dockerfile: open Dockerfile: no such file or directory"
+
+**Causa:** Coolify no puede encontrar el Dockerfile en la ruta especificada.
+
+**Solución 1:** Configurar Context Path correcto
+- En **Dockerfile Path**: escribir solo `Dockerfile`
+- En **Context Path**: dejar vacío `/`
+
+**Solución 2:** Usar "Docker Compose" en lugar de "Dockerfile"
+1. En **Build Type**: seleccionar **"Docker Compose"**
+2. En **Docker Compose Path**: escribir `docker-compose.yml`
+3. En **Context Path**: dejar vacío `/`
+4. Crear servicio
+
+**Solución 3:** Crear Dockerfile en subdirectorio
+Si ninguna de las anteriores funciona:
+1. En Coolify, **Dockerfile Path**: `./Dockerfile`
+2. **Context Path**: `.` (punto solo)
 
 ### Paso 3: Configurar Variables de Entorno
 
-En la configuración del servicio en Coolify, agrega las siguientes variables:
-
-#### Variables Requeridas:
+En la configuración del servicio en Coolify, ve a **"Environment Variables"** y agrega:
 
 | Variable | Valor | Descripción |
 |----------|--------|-------------|
@@ -49,31 +69,18 @@ En la configuración del servicio en Coolify, agrega las siguientes variables:
 
 **IMPORTANTE**: El servicio necesita acceso a la base de datos de Uptime Kuma.
 
-#### Opción A: Volumen Compartido (Recomendada)
-
 1. En Coolify, encuentra el servicio de Uptime Kuma
-2. Copia el nombre del volumen que usa (usualmente algo como `coolify-uptime-kuma-data`)
+2. Ve a **"Volumes"** y copia el nombre exacto del volumen que usa (ejemplo: `coolify-uptime-kuma-data`, `vsc-uptime-kuma-data`, etc.)
 3. En el servicio del Bridge, ve a **"Volumes"**
 4. Agrega un volumen:
-   - **Volume Path**: `/app/data`
+   - **Mount Path** (o Volume Path): `/app/data`
    - **Type**: `Volume`
-   - **Volume Name**: El nombre del volumen de Uptime Kuma (ej: `coolify-uptime-kuma-data`)
-   - **Read Only**: ✅ Marcar esta opción (IMPORTANTE: el Bridge solo debe LEER)
-
-#### Opción B: Montar Directorio Host (Alternativa)
-
-Si usas un directorio en el host para la base de datos:
-
-1. En Coolify, en el servicio del Bridge, ve a **"Volumes"**
-2. Agrega:
-   - **Volume Path**: `/app/data`
-   - **Type**: `Bind Mount`
-   - **Host Path**: `/ruta/donde/esta/kuma.db` (la ruta real en el servidor)
-   - **Read Only**: ✅ Marcar esta opción
+   - **Volume Name**: El nombre exacto del volumen de Uptime Kuma (copiado en paso 2)
+   - **Read Only**: ✅ Marcar esta opción (CRUCIAL: el Bridge solo debe LEER)
 
 ### Paso 5: Configurar Puertos y Dominio
 
-1. En la configuración del servicio, ve a **"Domains"**
+1. En la configuración del servicio, ve a **"Domains"** o **"Port"**
 2. Configura:
    - **Domain**: `uptime-bridge.davisa.store` (o subdominio que prefieras)
    - **Port**: `3003`
@@ -82,8 +89,9 @@ Si usas un directorio en el host para la base de datos:
 ### Paso 6: Verificar el Despliegue
 
 1. Espera a que Coolify termine el despliegue
-2. Ve a la URL configurada (ej: `https://uptime-bridge.davisa.store/health`)
-3. Deberías ver:
+2. Si falla, ve a los logs (más abajo en "Solución de Errores")
+3. Si tiene éxito, ve a la URL configurada (ej: `https://uptime-bridge.davisa.store/health`)
+4. Deberías ver:
    ```json
    {
      "status": "ok",
@@ -116,14 +124,34 @@ BRIDGE_API_URL=https://uptime-bridge.davisa.store
 
 ## 🐛 Solución de Problemas
 
+### Problema: "failed to read dockerfile: open Dockerfile: no such file or directory"
+
+**Opción 1: Usar Docker Compose**
+```
+Build Type: Docker Compose
+Docker Compose Path: docker-compose.yml
+Context Path: /
+```
+
+**Opción 2: Verificar rutas**
+```
+Dockerfile Path: Dockerfile
+Context Path: /
+```
+
+**Opción 3: Contactar soporte de Coolify**
+Si ninguna opción funciona, podría ser un bug de Coolify. 
+Verifica que todos los archivos estén en la raíz del repositorio: https://github.com/abidosjl28/uptime-kuma-bridge
+
 ### Problema: "Failed to connect to database"
 
 **Causa**: El volumen no está montado correctamente o el nombre es incorrecto.
 
 **Solución**:
-1. Verifica el nombre del volumen en el servicio de Uptime Kuma en Coolify
-2. Asegúrate de que el nombre coincida exactamente en el servicio del Bridge
+1. Verifica el nombre exacto del volumen en el servicio de Uptime Kuma en Coolify
+2. Asegúrate de que el nombre coincida EXACTAMENTE en el servicio del Bridge (respetar mayúsculas/minúsculas)
 3. Verifica que la ruta sea `/app/data`
+4. Verifica que "Read Only" esté marcado
 
 ### Problema: "Permission denied"
 
@@ -132,15 +160,17 @@ BRIDGE_API_URL=https://uptime-bridge.davisa.store
 **Solución**:
 1. Asegúrate de marcar "Read Only" en el volumen
 2. Si persiste, verifica que Uptime Kuma esté corriendo y haya creado la base de datos
+3. En los logs del Bridge, busca mensajes de error específicos
 
 ### Problema: El servicio no responde
 
 **Causa**: Error de configuración o problemas de red.
 
 **Solución**:
-1. Verifica los logs del servicio en Coolify
+1. Verifica los logs del servicio en Coolify (botón "Logs")
 2. Verifica que el puerto 3003 esté disponible
 3. Verifica la configuración de dominio
+4. En los logs, deberías ver: "✓ Connected to Uptime Kuma database: /app/data/kuma.db"
 
 ### Problema: Sigue mostrando solo 100 heartbeats
 
@@ -150,6 +180,7 @@ BRIDGE_API_URL=https://uptime-bridge.davisa.store
 1. Verifica que `BRIDGE_API_URL` esté configurado en `.env`
 2. Verifica que sea la URL correcta del Bridge en Coolify
 3. Reinicia el servicio backend
+4. En los logs del backend, deberías ver: "from Bridge API" en lugar de "from public API"
 
 ## 📊 Verificación de Funcionamiento
 
@@ -158,6 +189,7 @@ BRIDGE_API_URL=https://uptime-bridge.davisa.store
 En los logs de Coolify del servicio Bridge, deberías ver:
 ```
 ✓ Connected to Uptime Kuma database: /app/data/kuma.db
+✓ Uptime Kuma Bridge API running on port 3003
 ```
 
 ### 2. Verificar datos históricos completos
@@ -177,6 +209,7 @@ Deberías ver un número mayor a 100 (ej: 1500+, 3000+, etc.)
    ```
    Fetched 1500+ heartbeats for monitor XXX from Bridge API
    ```
+   (en lugar de los ~100 del API público)
 
 ## 🔐 Seguridad Recomendada
 
@@ -189,8 +222,7 @@ En Coolify, el dominio debería usar HTTPS automáticamente (Coolify gestiona ce
 Si deseas que solo tu IP pueda acceder al Bridge:
 
 1. En Coolify, ve a **"Network"** del servicio Bridge
-2. Configura **"Allowed IPs"** (si está disponible)
-3. O usa reglas de firewall en el servidor
+2. Configura reglas de firewall o allowed IPs si está disponible
 
 ### 3. Agregar Autenticación Básica (Opcional)
 
@@ -215,7 +247,8 @@ app.use(basicAuth({
 2. **No modifica Uptime Kuma**: El Bridge solo LEE datos, no escribe nada
 3. **Seguridad**: El Bridge usa modo read-only en la base de datos
 4. **Performance**: SQLite es muy rápido para consultas de lectura
-5. **Coolify gestiona SSL**: Certificados HTTPS automáticos
+5. **Coolify gestiona SSL**: Certificados HTTPS automáticos con Let's Encrypt
+6. **Volumen compartido**: El Bridge debe compartir el volumen EXACTO de Uptime Kuma
 
 ## 🎯 Resultado Esperado
 
@@ -234,17 +267,18 @@ Para actualizar el servicio Bridge:
 
 1. Haz commit de los cambios al repositorio Git
 2. En Coolify, ve al servicio Bridge
-3. Haz clic en **"Redeploy"**
+3. Haz clic en **"Redeploy"** o **"Deploy"**
 4. Coolify reconstruirá el contenedor con los nuevos cambios
 
 ## 📞 Soporte
 
 Si encuentras problemas:
 
-1. Revisa los logs en Coolify
-2. Verifica la configuración de volúmenes
+1. Revisa los logs en Coolify (botón "Logs")
+2. Verifica la configuración de volúmenes (el nombre debe ser EXACTO)
 3. Verifica las variables de entorno
 4. Verifica la conectividad de red entre servicios
+5. Verifica que todos los archivos estén en la raíz del repositorio GitHub
 
 ---
 
