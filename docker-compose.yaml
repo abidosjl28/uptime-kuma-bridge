@@ -5,16 +5,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - KUMA_DB_URL=${KUMA_DB_URL}
     restart: unless-stopped
-    volumes:
-      - uptime-kuma-data:/app/data:ro
     environment:
       - PORT=3003
       - DB_PATH=/app/data/kuma.db
       - NODE_ENV=${NODE_ENV:-production}
     labels:
       - coolify.managed=true
-
-volumes:
-  uptime-kuma-data:
-    external: true

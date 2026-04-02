@@ -17,6 +17,16 @@ RUN npm install --production=false
 
 COPY server.js ./
 
+# Create data directory
+RUN mkdir -p /app/data
+
+# Download kuma.db from Uptime Kuma if URL is provided
+ARG KUMA_DB_URL
+RUN if [ -n "$KUMA_DB_URL" ]; then \
+      apk add --no-cache curl && \
+      curl -o /app/data/kuma.db "$KUMA_DB_URL"; \
+    fi
+
 ENV PORT=3003
 ENV DB_PATH=/app/data/kuma.db
 ENV NODE_ENV=production
