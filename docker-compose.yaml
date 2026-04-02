@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     volumes:
       # Montar el volumen de datos de Uptime Kuma en modo lectura
-      - uptime-kuma-data:/app/data:ro
+      - dso8ccsocg408okkcc04cg44_uptime-kuma-data:/app/data:ro
       # Directorio para cache temporal si es necesario
       - /app/tmp
     environment:
@@ -22,5 +22,5 @@ services:
       - coolify.managed=true
 
 volumes:
-  uptime-kuma-data:
+  dso8ccsocg408okkcc04cg44_uptime-kuma-data:
     external: true
