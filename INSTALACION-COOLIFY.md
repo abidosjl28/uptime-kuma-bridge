@@ -1,15 +1,27 @@
-# Instalación en Coolify - Nueva Solución
+# Instalación en Coolify
 
-## 🔄 Cambio de Estrategia
+## 📋 Dos Soluciones Disponibles
 
-Dado que Coolify no puede montar el volumen externo `uptime-kuma-data` correctamente, cambiamos la estrategia:
+Este proyecto ofrece **dos soluciones** para actualizar la base de datos:
 
-**Antes**: Intentar montar volumen externo (no funcionaba)
-**Ahora**: Descargar archivo `kuma.db` desde una URL durante la construcción
+| Solución | Tiempo Real | Frecuencia | Complejidad |
+|-----------|--------------|-------------|--------------|
+| **Estática (URL)** | ❌ | Manual | Baja |
+| **Dinámica (/api/update-db)** | ✅ | Configurable | Media |
 
-## 📋 Requisitos Previos
+### Recomendación
 
-### 1. Hacer accesible el archivo kuma.db
+**Usa la solución dinámica** para actualizaciones casi en tiempo real.
+
+---
+
+## 🔄 Solución 1: Estática (URL durante construcción)
+
+Esta solución descarga el archivo `kuma.db` una sola vez durante la construcción de la imagen Docker.
+
+### Requisitos Previos
+
+#### 1. Hacer accesible el archivo kuma.db
 
 Necesitas hacer accesible el archivo `kuma.db` de Uptime Kuma. Opciones:
 
@@ -24,16 +36,16 @@ Necesitas hacer accesible el archivo `kuma.db` de Uptime Kuma. Opciones:
 **Opción C**: URL temporal
 - Usar un servicio como `transfer.sh` para compartir temporalmente el archivo
 
-### 2. Obtener la URL del archivo
+#### 2. Obtener la URL del archivo
 
 Una vez que tengas el archivo accesible, necesitarás una URL como:
 - `http://tu-servidor.com/kuma.db`
 - `https://tu-repositorio.com/kuma.db`
 - `https://transfer.sh/xyz/kuma.db`
 
-## ⚙️ Configuración en Coolify
+### Configuración en Coolify
 
-### Paso 1: Configurar la variable de entorno
+#### Paso 1: Configurar la variable de entorno
 
 En Coolify, para tu servicio `uptime-kuma-bridge`, agrega una variable de entorno:
 
@@ -45,13 +57,13 @@ Ejemplo:
 KUMA_DB_URL=http://mi-servidor.com/kuma.db
 ```
 
-### Paso 2: Redesplegar
+#### Paso 2: Redesplegar
 
 1. Ve a tu servicio en Coolify
 2. Haz clic en "Redeploy" o "Rebuild"
 3. Espera a que la construcción se complete
 
-### Paso 3: Verificar los logs
+#### Paso 3: Verificar los logs
 
 Deberías ver:
 
@@ -81,45 +93,79 @@ STEP 3: Connecting to database...
 ============================================================
 ```
 
-## 🔄 Actualización del archivo kuma.db
+### Actualización del archivo kuma.db
 
 El archivo `kuma.db` se descarga **una sola vez** durante la construcción de la imagen Docker. Si Uptime Kuma agrega nuevos datos, estos no se reflejarán automáticamente.
 
-### Solución: Actualización periódica
-
-Para mantener los datos actualizados, tienes dos opciones:
-
-**Opción 1**: Actualización manual
+Para actualizar:
 1. Copia el archivo `kuma.db` actualizado
 2. Sube el nuevo archivo a la misma URL
 3. Redespliega en Coolify
 
-**Opción 2**: Automatización con script
-Crea un script que:
-1. Copie el archivo `kuma.db` del contenedor de Uptime Kuma
-2. Lo suba a la URL configurada
-3. Dispare un webhook o notifique para actualizar
+---
 
-### Script de ejemplo para copiar kuma.db
+## 🔄 Solución 2: Dinámica (Endpoint /api/update-db) - RECOMENDADA
 
+Esta solución permite **actualizar la base de datos dinámicamente sin reconstruir el contenedor**, logrando datos casi en tiempo real.
+
+### Ventajas
+
+✅ **Casi tiempo real** - Actualización cada 5 minutos
+✅ **Sin reconstrucción** - El contenedor no se reinicia
+✅ **Backup automático** - Guarda copia del archivo anterior
+✅ **Escalable** - Puedes ajustar el intervalo
+✅ **Monitoreo completo** - Logs claros de cada actualización
+
+### Requisitos
+
+- El volumen `uptime-kuma-data` debe montarse como **writeable** (no read-only)
+- El Bridge API debe estar corriendo
+- Conectividad desde el servidor de Uptime Kuma al Bridge API
+
+### Implementación
+
+Para instrucciones completas de implementación, consulta el archivo:
+**[ACTUALIZACION-DINAMICA.md](./ACTUALIZACION-DINAMICA.md)**
+
+### Resumen Rápido
+
+1. Crea un script que copie `kuma.db` del contenedor de Uptime Kuma
+2. El script envía el archivo al endpoint `/api/update-db` cada X minutos
+3. El Bridge API actualiza la base de datos dinámicamente
+4. El frontend usa los datos actualizados casi en tiempo real
+
+### Endpoint del Bridge API
+
+**POST** `/api/update-db`
+
+- **Content-Type**: `multipart/form-data`
+- **Campo**: `db` (archivo)
+- **Tamaño máximo**: 100MB
+
+Ejemplo de solicitud:
 ```bash
-#!/bin/bash
-
-# Obtener el ID del contenedor de Uptime Kuma
-KUMA_CONTAINER=$(docker ps -q -f name=uptime-kuma)
-
-# Copiar el archivo
-docker cp $KUMA_CONTAINER:/app/data/kuma.db ./kuma.db
-
-# Subir a tu servidor (ajusta esto)
-scp ./kuma.db usuario@servidor.com:/ruta/publica/kuma.db
-
-echo "Archivo kuma.db actualizado"
+curl -X POST \
+  -F "db=@kuma.db" \
+  https://uptime-bridge.davisa.store/api/update-db
 ```
 
-## 🐛 Solución de Problemas
+Respuesta:
+```json
+{
+  "success": true,
+  "message": "Database updated successfully",
+  "monitorsCount": 5,
+  "timestamp": "2026-04-01T22:00:00.000Z"
+}
+```
 
-### El archivo no se descarga durante la construcción
+---
+
+## 🐛 Solución de Problemas Comunes
+
+### Solución Estática
+
+#### El archivo no se descarga durante la construcción
 
 Si ves:
 ```
@@ -127,32 +173,70 @@ curl: (35) SSL connect error
 ```
 Asegúrate de que la URL sea **HTTP** no HTTPS, o usa `curl -k` para ignorar errores SSL.
 
-### El archivo está corrupto
+#### El archivo está corrupto
 
 Si ves errores de SQLite después del despliegue:
 1. Verifica que el archivo `kuma.db` no esté corrupto
 2. Prueba el archivo localmente con `sqlite3 kuma.db "SELECT COUNT(*) FROM monitor"`
 3. Vuelve a subir una copia fresca
 
-## 📄 Ventajas de esta solución
+### Solución Dinámica
 
-✅ **No depende de volúmenes externos** - Funciona en cualquier plataforma
-✅ **Archivo incluido en la imagen** - No hay tiempo de espera
-✅ **Fácil de actualizar** - Solo necesitas cambiar el archivo en la URL
-✅ **Portabilidad** - El archivo está en la imagen Docker
+#### El script falla al copiar el archivo
 
-## 📄 Desventajas
+**Error**:
+```
+docker cp: Error: No such container: uptime-kuma
+```
+**Solución**:
+Verifica el nombre del contenedor:
+```bash
+docker ps | grep uptime
+```
 
-⚠️ **Actualización manual** - Necesitas actualizar periódicamente
-⚠️ **Tamaño de imagen** - La imagen Docker será más grande con el archivo
-⚠️ **No en tiempo real** - Los datos no se actualizan automáticamente
+#### La API rechaza el archivo
 
-## 🔄 Solución Futura: Sincronización Automática
+**Error**:
+```
+curl: (52) Empty reply from server
+```
+**Solución**:
+1. Verifica que el Bridge API esté corriendo
+2. Revisa los logs del Bridge API en Coolify
+3. Verifica que el puerto 3003 sea accesible
 
-Para una solución más robusta, podríamos implementar:
+---
 
-1. **API de sincronización** - Un endpoint que acepte actualizaciones del archivo
-2. **Webhook de Uptime Kuma** - Notificar cuando haya nuevos datos
-3. **Cron job** - Actualizar automáticamente cada X horas
+## 📄 Comparación de Soluciones
 
-Esto requeriría modificar el código de Uptime Kuma para agregar estos hooks.
+| Aspecto | Estática (URL) | Dinámica (API) |
+|-----------|----------------|-----------------|
+| Tiempo real | ❌ | ✅ |
+| Configuración inicial | Media | Media |
+| Mantenimiento | Manual (redespliegue) | Automático (script) |
+| Complejidad | Baja | Media |
+| Uso de volumen | No | Sí (writeable) |
+| Ideal para | Pruebas/Demo | Producción |
+
+## 🚀 Siguientes Pasos
+
+### Para Solución Estática
+
+1. Hacer accesible el archivo `kuma.db`
+2. Configurar `KUMA_DB_URL` en Coolify
+3. Redesplegar
+
+### Para Solución Dinámica (Recomendada)
+
+1. Consulta [ACTUALIZACION-DINAMICA.md](./ACTUALIZACION-DINAMICA.md)
+2. Implementa el script de actualización
+3. Configura como servicio o cron job
+4. Monitorea los logs
+
+## 📞 Soporte
+
+Si encuentras problemas:
+1. Revisa los logs en Coolify
+2. Verifica la documentación específica de cada solución
+3. Asegúrate de que Uptime Kuma esté corriendo
+4. Verifica la conectividad entre servidores
