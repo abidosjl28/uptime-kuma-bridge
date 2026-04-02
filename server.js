@@ -8,6 +8,9 @@ console.log('');
 import express from 'express';
 import Database from 'better-sqlite3';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
 
 console.log('✅ All modules imported successfully');
 console.log('');
@@ -63,8 +66,65 @@ try {
 console.log('✅ API ready, listening...');
 console.log('============================================================');
 
+// Configure multer for file uploads (memory storage)
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100MB limit
+  }
+});
+
 app.use(cors());
 app.use(express.json());
+
+// Endpoint para actualizar la base de datos dinámicamente
+app.post('/api/update-db', upload.single('db'), (req, res) => {
+  try {
+    console.log('📥 Database update request received');
+    
+    // Verificar si se envió el archivo
+    if (!req.file) {
+      return res.status(400).json({ error: 'No database file provided' });
+    }
+    
+    const dbFile = req.file;
+    console.log(`📄 Database file received: ${dbFile.originalname}, size: ${dbFile.size} bytes`);
+    
+    const oldDbPath = `${DB_PATH}.old`;
+    const newDbPath = DB_PATH;
+    
+    // Hacer backup del archivo actual si existe
+    if (fs.existsSync(newDbPath)) {
+      console.log('💾 Creating backup of current database...');
+      fs.renameSync(newDbPath, oldDbPath);
+    }
+    
+    // Escribir el nuevo archivo desde memoria
+    fs.writeFileSync(newDbPath, dbFile.buffer);
+    console.log('✅ Database updated successfully');
+    
+    // Reconectar a la nueva base de datos
+    db.close();
+    db = new Database(newDbPath, { readonly: true });
+    
+    const testResult = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
+    console.log(`✅ New database verified - ${testResult.count} monitors found`);
+    
+    res.json({ 
+      success: true,
+      message: 'Database updated successfully',
+      monitorsCount: testResult.count,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error updating database:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to update database',
+      message: error.message 
+    });
+  }
+});
 
 app.get('/', (req, res) => {
   res.json({ 
