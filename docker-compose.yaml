@@ -14,6 +14,9 @@ services:
       - PORT=3003
       - DB_PATH=/app/data/kuma.db
       - NODE_ENV=${NODE_ENV:-production}
+      - UPTIME_KUMA_API=${UPTIME_KUMA_API:-https://uptime.davisa.store/api}
+      - UPTIME_KUMA_USERNAME=${UPTIME_KUMA_USERNAME}
+      - UPTIME_KUMA_PASSWORD=${UPTIME_KUMA_PASSWORD}
     labels:
       - coolify.managed=true
 
