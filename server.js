@@ -6,31 +6,9 @@ console.log('STEP 1: Importing modules...');
 console.log('');
 
 import express from 'express';
-import Database from 'better-sqlite3';
 import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
 import multer from 'multer';
-
-// Simple fetch implementation (Node 22+ has native fetch)
-async function fetchWithRetry(url, options = {}, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, options);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      return response;
-    } catch (error) {
-      console.error(`Attempt ${i + 1} failed:`, error.message);
-      if (i < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
+import Database from 'better-sqlite3';
 
 console.log('✅ All modules imported successfully');
 console.log('');
@@ -59,7 +37,7 @@ console.log('STEP 3: Connecting to database...');
 console.log('============================================================');
 
 let db;
-let isReadOnly = true; // Por defecto readonly
+let isReadOnly = true;
 
 try {
   db = new Database(DB_PATH, { readonly: isReadOnly });
@@ -78,11 +56,11 @@ try {
   console.error('This usually means:');
   console.error('  1. The volume "uptime-kuma-data" is not mounted at /app/data');
   console.error('  2. The database file does not exist');
-  console.error('  3. Incorrect volume name in Coolify configuration');
+  console.error('  3. Volume name does not match');
   console.error('');
   console.error('Troubleshooting:');
   console.error('  - Check volume name matches exactly: "uptime-kuma-data"');
-  console.error('  - Verify "Read Only" is checked in Coolify');
+  console.error('  - Verify volume is mounted in read-only mode (:ro)');
   console.error('  - Ensure Uptime Kuma is running');
   console.error('============================================================');
   process.exit(1);
@@ -102,201 +80,13 @@ const upload = multer({
 app.use(cors());
 app.use(express.json());
 
-// Endpoint para actualizar la base de datos dinámicamente
-app.post('/api/update-db', upload.single('db'), (req, res) => {
-  try {
-    console.log('📥 Database update request received');
-    
-    // Verificar si se envió el archivo
-    if (!req.file) {
-      return res.status(400).json({ error: 'No database file provided' });
-    }
-    
-    const dbFile = req.file;
-    console.log(`📄 Database file received: ${dbFile.originalname}, size: ${dbFile.size} bytes`);
-    
-    const oldDbPath = `${DB_PATH}.old`;
-    const newDbPath = DB_PATH;
-    
-    // Hacer backup del archivo actual si existe
-    if (fs.existsSync(newDbPath)) {
-      console.log('💾 Creating backup of current database...');
-      fs.renameSync(newDbPath, oldDbPath);
-    }
-    
-    // Escribir el nuevo archivo desde memoria
-    fs.writeFileSync(newDbPath, dbFile.buffer);
-    console.log('✅ Database updated successfully');
-    
-    // Reconectar a la nueva base de datos
-    db.close();
-    db = new Database(newDbPath, { readonly: true });
-    
-    const testResult = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
-    console.log(`✅ New database verified - ${testResult.count} monitors found`);
-    
-    res.json({ 
-      success: true,
-      message: 'Database updated successfully',
-      monitorsCount: testResult.count,
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('❌ Error updating database:', error.message);
-    res.status(500).json({ 
-      error: 'Failed to update database',
-      message: error.message 
-    });
-  }
-});
-
-// Endpoint para sincronizar automáticamente con Uptime Kuma
-app.post('/api/sync', async (req, res) => {
-  try {
-    console.log('🔄 Sync request received');
-    
-    // Verificar credenciales
-    if (!UPTIME_KUMA_USERNAME || !UPTIME_KUMA_PASSWORD) {
-      return res.status(400).json({ 
-        error: 'Missing Uptime Kuma credentials',
-        message: 'UPTIME_KUMA_USERNAME and UPTIME_KUMA_PASSWORD environment variables are required' 
-      });
-    }
-    
-    // Paso 1: Login a Uptime Kuma para obtener token
-    console.log('🔐 Logging in to Uptime Kuma...');
-    const loginResponse = await fetchWithRetry(`${UPTIME_KUMA_API}/login/access-token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        username: UPTIME_KUMA_USERNAME,
-        password: UPTIME_KUMA_PASSWORD,
-      }).toString(),
-    });
-    
-    if (!loginResponse.ok) {
-      const errorText = await loginResponse.text();
-      console.error('❌ Login failed:', errorText);
-      return res.status(401).json({ 
-        error: 'Authentication failed',
-        message: 'Failed to authenticate with Uptime Kuma' 
-      });
-    }
-    
-    const loginData = await loginResponse.json();
-    const accessToken = loginData.access_token;
-    console.log('✅ Login successful, access token obtained');
-    
-    // Paso 2: Obtener monitores desde Uptime Kuma
-    console.log('📊 Fetching monitors from Uptime Kuma...');
-    const monitorsResponse = await fetchWithRetry(`${UPTIME_KUMA_API}/monitors`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Accept': 'application/json',
-      },
-    });
-    
-    if (!monitorsResponse.ok) {
-      const errorText = await monitorsResponse.text();
-      console.error('❌ Failed to fetch monitors:', errorText);
-      return res.status(500).json({ 
-        error: 'Failed to fetch monitors',
-        message: errorText 
-      });
-    }
-    
-    const monitorsData = await monitorsResponse.json();
-    const monitors = monitorsData.monitors || [];
-    console.log(`✅ Fetched ${monitors.length} monitors from Uptime Kuma`);
-    
-    // Paso 3: Obtener heartbeats para cada monitor
-    console.log('💓 Fetching heartbeats from Uptime Kuma...');
-    
-    // Abrir la base de datos en modo write si es readonly
-    const wasReadOnly = isReadOnly;
-    if (isReadOnly) {
-      db.close();
-      db = new Database(DB_PATH, { readonly: false });
-      isReadOnly = false;
-      console.log('🔓 Switched to write mode for sync');
-    }
-    
-    for (const monitor of monitors) {
-      try {
-        // Obtener heartbeats (limit 100 cada vez)
-        const heartbeatsResponse = await fetchWithRetry(
-          `${UPTIME_KUMA_API}/monitors/${monitor.id}/heartbeats?limit=100`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Accept': 'application/json',
-            },
-          }
-        );
-        
-        if (heartbeatsResponse.ok) {
-          const heartbeatsData = await heartbeatsResponse.json();
-          const heartbeats = heartbeatsData.heartbeats || [];
-          
-          // Insertar o actualizar heartbeats en la base de datos local
-          if (heartbeats.length > 0) {
-            const insertStmt = db.prepare(`
-              INSERT OR REPLACE INTO heartbeat (id, monitor_id, status, ping, msg, time, important)
-              VALUES (?, ?, ?, ?, ?, ?)
-            `);
-            
-            let insertedCount = 0;
-            for (const heartbeat of heartbeats) {
-              insertStmt.run(
-                heartbeat.id,
-                heartbeat.monitor_id,
-                heartbeat.status,
-                heartbeat.ping || null,
-                heartbeat.msg || '',
-                new Date(heartbeat.time).toISOString()
-              );
-              insertedCount++;
-            }
-            
-            console.log(`  ✅ Synced ${insertedCount} heartbeats for monitor "${monitor.name}"`);
-          }
-        }
-        
-        // Esperar un poco para evitar rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (error) {
-        console.error(`  ⚠️  Error syncing monitor "${monitor.name}":`, error.message);
-      }
-    }
-    
-    console.log('✅ Sync completed');
-    
-    res.json({
-      success: true,
-      message: 'Database synchronized with Uptime Kuma',
-      syncedMonitors: monitors.length,
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('❌ Error syncing database:', error.message);
-    res.status(500).json({ 
-      error: 'Failed to sync database',
-      message: error.message 
-    });
-  }
-});
-
 app.get('/', (req, res) => {
   res.json({ 
     service: 'Uptime Kuma Bridge API',
     status: 'running',
     database: DB_PATH,
+    mode: 'sqlite-readonly',
+    uptimeKumaApi: UPTIME_KUMA_API,
     endpoints: {
       health: '/health',
       monitors: '/api/monitors',
@@ -518,6 +308,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('Listening on: http://0.0.0.0:' + PORT);
   console.log('Database: ' + DB_PATH);
+  console.log('Mode: SQLite Read-Only (accessing Uptime Kuma database directly)');
   console.log('');
   console.log('Available endpoints:');
   console.log('  GET  /                           - Service information');
@@ -543,4 +334,21 @@ server.on('error', (error) => {
   console.error('============================================================');
   console.error('');
   process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  if (db) {
+    db.close();
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully');
+  if (db) {
+    db.close();
+  }
+  process.exit(0);
 });

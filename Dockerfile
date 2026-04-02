@@ -1,13 +1,12 @@
 FROM node:22-alpine
 
-# Install build dependencies for native modules and file upload
+# Install build dependencies for native modules
 RUN apk add --no-cache \
     python3 \
     make \
     g++ \
     sqlite \
-    sqlite-dev \
-    curl
+    sqlite-dev
 
 WORKDIR /app
 
@@ -20,12 +19,6 @@ COPY server.js ./
 
 # Create data directory
 RUN mkdir -p /app/data
-
-# Download initial kuma.db from Uptime Kuma if URL is provided
-ARG KUMA_DB_URL
-RUN if [ -n "$KUMA_DB_URL" ]; then \
-      curl -o /app/data/kuma.db "$KUMA_DB_URL"; \
-    fi
 
 ENV PORT=3003
 ENV DB_PATH=/app/data/kuma.db

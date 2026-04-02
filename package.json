@@ -1,8 +1,8 @@
 {
   "name": "uptime-kuma-bridge",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
-  "description": "Bridge API to expose Uptime Kuma historical data",
+  "description": "Bridge API to expose Uptime Kuma historical data via SQLite",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
