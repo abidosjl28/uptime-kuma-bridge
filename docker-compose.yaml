@@ -6,21 +6,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    volumes:
-      # Montar el volumen de datos de Uptime Kuma en modo lectura
-      - dso8ccsocg408okkcc04cg44_uptime-kuma-data:/app/data:ro
-      # Directorio para cache temporal si es necesario
-      - /app/tmp
     environment:
       - PORT=3003
       - NODE_ENV=${NODE_ENV:-production}
       - UPTIME_KUMA_API=${UPTIME_KUMA_API:-https://uptime.davisa.store/api}
       - UPTIME_KUMA_USERNAME=${UPTIME_KUMA_USERNAME}
       - UPTIME_KUMA_PASSWORD=${UPTIME_KUMA_PASSWORD}
-      - DB_PATH=/app/data/kuma.db
     labels:
       - coolify.managed=true
-
-volumes:
-  dso8ccsocg408okkcc04cg44_uptime-kuma-data:
-    external: true

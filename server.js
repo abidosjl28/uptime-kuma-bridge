@@ -8,7 +8,6 @@ console.log('');
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import Database from 'better-sqlite3';
 
 console.log('✅ All modules imported successfully');
 console.log('');
@@ -17,157 +16,208 @@ console.log('');
 
 const app = express();
 const PORT = process.env.PORT || 3003;
-const DB_PATH = process.env.DB_PATH || '/app/data/kuma.db';
-const UPTIME_KUMA_API = process.env.UPTIME_KUMA_API || 'https://uptime.davisa.store/api';
+const UPTIME_KUMA_URL = process.env.UPTIME_KUMA_API?.replace('/api', '') || 'https://uptime.davisa.store';
 const UPTIME_KUMA_USERNAME = process.env.UPTIME_KUMA_USERNAME || '';
 const UPTIME_KUMA_PASSWORD = process.env.UPTIME_KUMA_PASSWORD || '';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos de caché
 
 console.log('✅ Express app created');
 console.log('');
 console.log('Configuration:');
 console.log(`  Port: ${PORT}`);
-console.log(`  Database: ${DB_PATH}`);
-console.log(`  Uptime Kuma API: ${UPTIME_KUMA_API}`);
+console.log(`  Uptime Kuma URL: ${UPTIME_KUMA_URL}`);
 console.log(`  Node Version: ${process.version}`);
 console.log(`  Platform: ${process.platform}`);
 console.log(`  Architecture: ${process.arch}`);
 console.log(`  Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log('');
-console.log('STEP 3: Connecting to database...');
-console.log('============================================================');
 
-let db;
-let isReadOnly = true;
+// Caché en memoria
+const cache = {
+  metrics: {
+    data: null,
+    timestamp: 0
+  },
+  monitors: {
+    data: null,
+    timestamp: 0
+  }
+};
 
-try {
-  db = new Database(DB_PATH, { readonly: isReadOnly });
-  console.log('✅ Connected to database');
+// Helper para hacer requests con autenticación
+async function fetchWithAuth(url) {
+  const headers = {
+    'Authorization': 'Basic ' + Buffer.from(`${UPTIME_KUMA_USERNAME}:${UPTIME_KUMA_PASSWORD}`).toString('base64')
+  };
+
+  const response = await fetch(url, { headers });
   
-  const testResult = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
-  console.log(`✅ Database verified - ${testResult.count} monitors found`);
-  
-} catch (error) {
-  console.error('');
-  console.error('============================================================');
-  console.error('❌ FATAL ERROR: Database connection failed');
-  console.error('============================================================');
-  console.error('Error message:', error.message);
-  console.error('');
-  console.error('This usually means:');
-  console.error('  1. The volume "uptime-kuma-data" is not mounted at /app/data');
-  console.error('  2. The database file does not exist');
-  console.error('  3. Volume name does not match');
-  console.error('');
-  console.error('Troubleshooting:');
-  console.error('  - Check volume name matches exactly: "uptime-kuma-data"');
-  console.error('  - Verify volume is mounted in read-only mode (:ro)');
-  console.error('  - Ensure Uptime Kuma is running');
-  console.error('============================================================');
-  process.exit(1);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  return response;
 }
 
-console.log('✅ API ready, listening...');
-console.log('============================================================');
-
-// Configure multer for file uploads (memory storage)
-const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB limit
+// Parser de métricas de Prometheus/Uptime Kuma
+function parseMetrics(metricsText) {
+  const lines = metricsText.split('\n');
+  const monitors = [];
+  const heartbeats = [];
+  
+  for (const line of lines) {
+    // Uptime Kuma metrics format
+    if (line.startsWith('monitor_status{')) {
+      const match = line.match(/monitor_status\{name="([^"]+)"\} (\d+)/);
+      if (match) {
+        monitors.push({
+          id: monitors.length + 1,
+          name: match[1],
+          status: parseInt(match[2])
+        });
+      }
+    }
+    
+    // Parse heartbeat data from metrics
+    if (line.startsWith('monitor_up{')) {
+      const match = line.match(/monitor_up\{name="([^"]+)"\} (\d+)/);
+      if (match) {
+        heartbeats.push({
+          monitor_name: match[1],
+          status: 1,
+          time: new Date().toISOString()
+        });
+      }
+    }
+    
+    if (line.startsWith('monitor_down{')) {
+      const match = line.match(/monitor_down\{name="([^"]+)"\} (\d+)/);
+      if (match) {
+        heartbeats.push({
+          monitor_name: match[1],
+          status: 0,
+          time: new Date().toISOString()
+        });
+      }
+    }
   }
-});
+  
+  return { monitors, heartbeats };
+}
+
+// Obtener métricas desde Uptime Kuma
+async function fetchMetrics() {
+  const now = Date.now();
+  
+  if (cache.metrics.data && (now - cache.metrics.timestamp) < CACHE_TTL) {
+    console.log('📦 Using cached metrics');
+    return cache.metrics.data;
+  }
+
+  try {
+    console.log('📊 Fetching metrics from Uptime Kuma...');
+    const response = await fetchWithAuth(`${UPTIME_KUMA_URL}/metrics`);
+    const metricsText = await response.text();
+    
+    const parsed = parseMetrics(metricsText);
+    
+    // Transformar a formato de monitores
+    const monitors = parsed.monitors.map(m => ({
+      id: m.id,
+      name: m.name,
+      status: m.status,
+      type: 'http',
+      active: 1,
+      interval: 60
+    }));
+    
+    const heartbeatsByMonitor = {};
+    parsed.heartbeats.forEach(h => {
+      if (!heartbeatsByMonitor[h.monitor_name]) {
+        heartbeatsByMonitor[h.monitor_name] = [];
+      }
+      heartbeatsByMonitor[h.monitor_name].push(h);
+    });
+    
+    cache.monitors.data = monitors;
+    cache.monitors.timestamp = now;
+    cache.metrics.data = { monitors, heartbeats: heartbeatsByMonitor };
+    cache.metrics.timestamp = now;
+    
+    console.log(`✅ Parsed ${monitors.length} monitors from metrics`);
+    return cache.metrics.data;
+  } catch (error) {
+    console.error('❌ Error fetching metrics:', error.message);
+    throw error;
+  }
+}
+
+// Middleware for auth check
+function checkAuth(req, res, next) {
+  if (!UPTIME_KUMA_USERNAME || !UPTIME_KUMA_PASSWORD) {
+    return res.status(500).json({ 
+      error: 'Server not configured',
+      message: 'UPTIME_KUMA_USERNAME and UPTIME_KUMA_PASSWORD environment variables are required' 
+    });
+  }
+  next();
+}
 
 app.use(cors());
 app.use(express.json());
+
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024
+  }
+});
 
 app.get('/', (req, res) => {
   res.json({ 
     service: 'Uptime Kuma Bridge API',
     status: 'running',
-    database: DB_PATH,
-    mode: 'sqlite-readonly',
-    uptimeKumaApi: UPTIME_KUMA_API,
+    mode: 'metrics-api',
+    uptimeKumaUrl: UPTIME_KUMA_URL,
     endpoints: {
       health: '/health',
       monitors: '/api/monitors',
       monitorDetail: '/api/monitors/:id',
       heartbeats: '/api/monitors/:id/heartbeats',
-      heartbeatRange: '/api/monitors/:id/heartbeats/range',
-      stats: '/api/stats'
+      stats: '/api/stats',
+      clearCache: '/api/cache/clear'
     }
   });
 });
 
 app.get('/health', (req, res) => {
-  try {
-    const testResult = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
-    res.json({ 
-      status: 'ok', 
-      message: 'Uptime Kuma Bridge API is running',
-      database: DB_PATH,
-      monitorsCount: testResult.count 
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error',
-      message: error.message 
-    });
-  }
+  res.json({ 
+    status: 'ok', 
+    message: 'Uptime Kuma Bridge API is running',
+    mode: 'metrics-api',
+    uptimeKumaUrl: UPTIME_KUMA_URL,
+    cache: {
+      monitors: cache.monitors.data ? 'loaded' : 'empty',
+      metrics: cache.metrics.data ? 'loaded' : 'empty'
+    }
+  });
 });
 
-app.get('/api/monitors', (req, res) => {
+app.get('/api/monitors', checkAuth, async (req, res) => {
   try {
-    const monitors = db.prepare(`
-      SELECT 
-        id, 
-        name, 
-        type, 
-        url, 
-        hostname, 
-        port, 
-        interval, 
-        maxretries, 
-        upsideDown,
-        active,
-        weight,
-        notificationIDList,
-        retryInterval
-      FROM monitor
-      ORDER BY id
-    `).all();
-    
-    res.json({ monitors });
+    const data = await fetchMetrics();
+    res.json({ monitors: data.monitors });
   } catch (error) {
     console.error('❌ Error fetching monitors:', error.message);
     res.status(500).json({ error: 'Failed to fetch monitors', message: error.message });
   }
 });
 
-app.get('/api/monitors/:id', (req, res) => {
+app.get('/api/monitors/:id', checkAuth, async (req, res) => {
   try {
+    const data = await fetchMetrics();
     const monitorId = parseInt(req.params.id);
-    
-    const monitor = db.prepare(`
-      SELECT 
-        id, 
-        name, 
-        type, 
-        url, 
-        hostname, 
-        port, 
-        interval, 
-        maxretries, 
-        upsideDown,
-        active,
-        weight,
-        notificationIDList,
-        retryInterval,
-        created_date,
-        docker_host,
-        docker_container
-      FROM monitor
-      WHERE id = ?
-    `).get(monitorId);
+    const monitor = data.monitors.find(m => m.id === monitorId);
     
     if (!monitor) {
       return res.status(404).json({ error: 'Monitor not found' });
@@ -180,49 +230,29 @@ app.get('/api/monitors/:id', (req, res) => {
   }
 });
 
-app.get('/api/monitors/:id/heartbeats', (req, res) => {
+app.get('/api/monitors/:id/heartbeats', checkAuth, async (req, res) => {
   try {
+    const data = await fetchMetrics();
     const monitorId = parseInt(req.params.id);
-    const { limit, startDate, endDate } = req.query;
+    const monitor = data.monitors.find(m => m.id === monitorId);
     
-    let query = `
-      SELECT 
-        id, 
-        monitor_id, 
-        status, 
-        ping, 
-        msg, 
-        time,
-        important
-      FROM heartbeat
-      WHERE monitor_id = ?
-    `;
-    
-    const params = [monitorId];
-    
-    if (startDate) {
-      query += ' AND time >= ?';
-      params.push(startDate);
+    if (!monitor) {
+      return res.status(404).json({ error: 'Monitor not found' });
     }
     
-    if (endDate) {
-      query += ' AND time <= ?';
-      params.push(endDate);
-    }
+    const heartbeats = data.heartbeats[monitor.name] || [];
+    const { limit } = req.query;
     
-    query += ' ORDER BY time DESC';
-    
+    let result = heartbeats;
     if (limit) {
-      query += ' LIMIT ?';
-      params.push(parseInt(limit));
+      result = heartbeats.slice(0, parseInt(limit));
     }
-    
-    const heartbeats = db.prepare(query).all(...params);
     
     res.json({ 
       monitorId,
-      total: heartbeats.length,
-      heartbeats 
+      monitorName: monitor.name,
+      total: result.length,
+      heartbeats: result 
     });
   } catch (error) {
     console.error('❌ Error fetching heartbeats:', error.message);
@@ -230,66 +260,36 @@ app.get('/api/monitors/:id/heartbeats', (req, res) => {
   }
 });
 
-app.get('/api/monitors/:id/heartbeats/range', (req, res) => {
+app.get('/api/stats', checkAuth, async (req, res) => {
   try {
-    const monitorId = parseInt(req.params.id);
-    const { startDate, endDate } = req.query;
+    const data = await fetchMetrics();
     
-    if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'startDate and endDate are required' });
-    }
+    const totalMonitors = data.monitors.length;
+    const onlineMonitors = data.monitors.filter(m => m.status === 1).length;
+    const offlineMonitors = totalMonitors - onlineMonitors;
     
-    const heartbeats = db.prepare(`
-      SELECT 
-        id, 
-        monitor_id, 
-        status, 
-        ping, 
-        msg, 
-        time,
-        important
-      FROM heartbeat
-      WHERE monitor_id = ? 
-        AND time >= ? 
-        AND time <= ?
-      ORDER BY time ASC
-    `).all(monitorId, startDate, endDate);
+    const totalHeartbeats = Object.values(data.heartbeats).flat().length;
     
     res.json({ 
-      monitorId,
-      startDate,
-      endDate,
-      total: heartbeats.length,
-      heartbeats 
-    });
-  } catch (error) {
-    console.error('❌ Error fetching heartbeat range:', error.message);
-    res.status(500).json({ error: 'Failed to fetch heartbeat range', message: error.message });
-  }
-});
-
-app.get('/api/stats', (req, res) => {
-  try {
-    const stats = db.prepare(`
-      SELECT 
-        COUNT(*) as totalHeartbeats,
-        COUNT(CASE WHEN status = 1 THEN 1 END) as onlineHeartbeats,
-        COUNT(CASE WHEN status = 0 THEN 1 END) as offlineHeartbeats,
-        MIN(time) as oldestHeartbeat,
-        MAX(time) as newestHeartbeat
-      FROM heartbeat
-    `).get();
-    
-    const monitorsCount = db.prepare('SELECT COUNT(*) as count FROM monitor').get();
-    
-    res.json({ 
-      ...stats,
-      totalMonitors: monitorsCount.count 
+      totalMonitors,
+      onlineMonitors,
+      offlineMonitors,
+      totalHeartbeats,
+      uptimeKumaUrl: UPTIME_KUMA_URL
     });
   } catch (error) {
     console.error('❌ Error fetching stats:', error.message);
     res.status(500).json({ error: 'Failed to fetch stats', message: error.message });
   }
+});
+
+app.post('/api/cache/clear', (req, res) => {
+  cache.monitors.data = null;
+  cache.monitors.timestamp = 0;
+  cache.metrics.data = null;
+  cache.metrics.timestamp = 0;
+  console.log('🧹 Cache cleared');
+  res.json({ success: true, message: 'Cache cleared' });
 });
 
 app.use((req, res) => {
@@ -307,8 +307,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('============================================================');
   console.log('');
   console.log('Listening on: http://0.0.0.0:' + PORT);
-  console.log('Database: ' + DB_PATH);
-  console.log('Mode: SQLite Read-Only (accessing Uptime Kuma database directly)');
+  console.log('Uptime Kuma URL: ' + UPTIME_KUMA_URL);
+  console.log('Mode: Metrics API (no database or external volume required)');
   console.log('');
   console.log('Available endpoints:');
   console.log('  GET  /                           - Service information');
@@ -316,8 +316,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /api/monitors                - List all monitors');
   console.log('  GET  /api/monitors/:id            - Get monitor details');
   console.log('  GET  /api/monitors/:id/heartbeats    - Get monitor heartbeats');
-  console.log('  GET  /api/monitors/:id/heartbeats/range - Get heartbeats in date range');
   console.log('  GET  /api/stats                   - Get statistics');
+  console.log('  POST /api/cache/clear            - Clear cache');
   console.log('============================================================');
   console.log('');
 });
@@ -334,21 +334,4 @@ server.on('error', (error) => {
   console.error('============================================================');
   console.error('');
   process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM received, shutting down gracefully');
-  if (db) {
-    db.close();
-  }
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('🛑 SIGINT received, shutting down gracefully');
-  if (db) {
-    db.close();
-  }
-  process.exit(0);
 });
